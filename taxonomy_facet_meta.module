@@ -1,0 +1,556 @@
+<?php
+
+use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\taxonomy\Entity\Vocabulary;
+use Drupal\taxonomy\Entity\Term;
+use Drupal\Core\Url;
+use Drupal\path_alias\Entity\PathAlias;
+
+/**
+ * Implements hook_page_attachments_alter().
+ */
+
+function taxonomy_facet_meta_page_attachments_alter(array &$attachments) {
+    $current_path = \Drupal::service('path.current')->getPath();
+    $route_match = \Drupal::routeMatch();
+    $path_parts = explode('/', trim($current_path, '/'));
+
+    if ($route_match->getRouteName() !== 'entity.node.canonical') {
+        $config = \Drupal::config('taxonomy_facet_meta.settings');
+        $pretty_paths_coder = $config->get('pretty_paths_coder');
+
+        $base_facet_url = $config->get('facet_base_url');
+        $base_facet_path = parse_url($base_facet_url, PHP_URL_PATH) ?: '/';
+
+        if (strpos($current_path, $base_facet_path) === 0) {
+            $facet_aliases = $config->get('facet_alias_');
+            $vocabularies = Vocabulary::loadMultiple();
+            $num_vocabularies = count($vocabularies);
+
+            if ($num_vocabularies == 1) {
+                $vocab_id = reset($vocabularies)->id();
+                $facet_alias = $config->get('facet_alias_' . $vocab_id);
+
+                if (in_array($facet_alias, $path_parts)) {
+                    if ($pretty_paths_coder === 'taxonomy_term_name_id') {
+                        $key = array_search($facet_alias, $path_parts);
+                        $key++;
+                        preg_match('/(?<=-)[0-9]+$/', $path_parts[$key], $category_arg);
+                        if (!empty($category_arg)) {
+                            $term = Term::load($category_arg[0]);
+                            if ($term) {
+                                $name = $term->name->value;
+                            }
+                        }
+                    } elseif ($pretty_paths_coder === 'taxonomy_term_name') {
+                        $alias_index = array_search($facet_alias, $path_parts);
+                        $term_url_part = $path_parts[$alias_index + 1] ?? null;
+                        if ($term_url_part) {
+                            $query = \Drupal::database()->select('path_alias', 'pa');
+                            $query->fields('pa', ['path', 'alias']);
+                            $query->condition('pa.alias', '%' . \Drupal::database()->escapeLike($term_url_part) . '%', 'LIKE');
+                            $path_aliases = $query->execute()->fetchAll();
+                            foreach ($path_aliases as $path_alias) {
+                                $alias_parts = explode('/', $path_alias->alias);
+                                $last_part = end($alias_parts);
+                                if ($last_part === $term_url_part && preg_match('/taxonomy\/term\/(\d+)/', $path_alias->path, $matches)) {
+                                    $term_id = $matches[1];
+                                    $term = Term::load($term_id);
+                                    $name = $term->name->value;
+                                }
+                            }
+                        }
+                    }
+                    
+
+
+                }
+            } elseif ($num_vocabularies > 1) {
+                $first_vocab = $config->get('first_vocab_select');
+                $second_vocab = $config->get('second_vocab_select');
+                
+                $first_vocab_facet_alias = $config->get('facet_alias_' . $first_vocab);
+
+                $active_facet_aliases = [];
+
+                $first_facet_alias = $config->get('facet_alias_' . $first_vocab);
+                if ($first_facet_alias && in_array($first_facet_alias, $path_parts)) {
+                    $active_facet_aliases[] = $first_facet_alias;
+                }
+
+                $second_facet_alias = $config->get('facet_alias_' . $second_vocab);
+                if ($second_facet_alias && in_array($second_facet_alias, $path_parts)) {
+                    $active_facet_aliases[] = $second_facet_alias;
+                }
+
+                if (count($active_facet_aliases) === 1) {
+                    if ($pretty_paths_coder === 'taxonomy_term_name_id') {
+                        $key = array_search($active_facet_aliases['0'], $path_parts);
+                        $key++;
+                        preg_match('/(?<=-)[0-9]+$/', $path_parts[$key], $category_arg);
+                        $term = Term::load($category_arg[0]);
+                        $name = $term->name->value;
+                    } elseif ($pretty_paths_coder === 'taxonomy_term_name') {
+                        $alias_index = array_search($active_facet_aliases['0'], $path_parts);
+                        $term_url_part = $path_parts[$alias_index + 1] ?? null;
+                        if ($term_url_part) {
+                            $query = \Drupal::database()->select('path_alias', 'pa');
+                            $query->fields('pa', ['path', 'alias']);
+                            $query->condition('pa.alias', '%' . \Drupal::database()->escapeLike($term_url_part) . '%', 'LIKE');
+                            $path_aliases = $query->execute()->fetchAll();
+                            foreach ($path_aliases as $path_alias) {
+                                $alias_parts = explode('/', $path_alias->alias);
+                                $last_part = end($alias_parts);
+                                if ($last_part === $term_url_part && preg_match('/taxonomy\/term\/(\d+)/', $path_alias->path, $matches)) {
+                                    $term_id = $matches[1];
+                                    $term = Term::load($term_id);
+                                    $name = $term->name->value;
+                                }
+                            }
+                        }
+                    }
+
+                    $description_template = $config->get('description_template_' . $active_facet_aliases['0']);                                       
+                    if ($description_template) {
+                        $description = str_replace('[token]', $name, $description_template);
+                        $attachments['#attached']['html_head'][] = [
+                            [
+                                '#tag' => 'meta',
+                                '#attributes' => [
+                                    'name' => 'description',
+                                    'content' => $description,
+                                ],
+                            ],
+                            'description_meta_tag',
+                        ];
+                    }
+
+                } elseif (count($active_facet_aliases) > 1) {
+                    if ($pretty_paths_coder === 'taxonomy_term_name_id') {
+                        $facet_names = [];
+                        foreach ($active_facet_aliases as $facet_alias) {
+                            if (in_array($facet_alias, $path_parts)) {
+                                $key = array_search($facet_alias, $path_parts);
+                                $key++;
+                                preg_match('/(?<=-)[0-9]+$/', $path_parts[$key], $facet_arg);
+                                if (!empty($facet_arg)) {
+                                    $term = Term::load($facet_arg[0]);
+                                    if ($term) {
+                                        $facet_names[$facet_alias] = $term->getName();
+                                    }
+                                }
+                            }
+                        }
+
+                    } elseif ($pretty_paths_coder === 'taxonomy_term_name') {
+                        $facet_names = [];
+
+                        foreach ($active_facet_aliases as $facet_alias) {
+                            if (in_array($facet_alias, $path_parts)) {
+                                $alias_index = array_search($facet_alias, $path_parts);
+                                $term_url_part = $path_parts[$alias_index + 1] ?? null;
+                    
+                                if ($term_url_part) {
+                                    
+                                    $query = \Drupal::database()->select('path_alias', 'pa');
+                                    $query->fields('pa', ['path', 'alias']);
+                                    $query->condition('pa.alias', '%' . \Drupal::database()->escapeLike($term_url_part) . '%', 'LIKE');
+                                    $path_aliases = $query->execute()->fetchAll();
+                    
+                                    foreach ($path_aliases as $path_alias) {
+                                        $alias_parts = explode('/', $path_alias->alias);
+                                        $last_part = end($alias_parts);
+                    
+                                        if ($last_part === $term_url_part && preg_match('/taxonomy\/term\/(\d+)/', $path_alias->path, $matches)) {
+                                            $term_id = $matches[1];
+                                            $term = Term::load($term_id);
+                    
+                                            if ($term) {
+                                                $facet_names[$facet_alias] = $term->getName();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    $description_template = $config->get('double_token_description_template');
+                    $counter = 1;
+                    foreach ($facet_names as $name) {
+                        $description_template = str_replace("[token$counter]", $name, $description_template);
+                        $counter++;
+                    }
+                    if ($description_template) {
+                        $attachments['#attached']['html_head'][] = [
+                            [
+                                '#tag' => 'meta',
+                                '#attributes' => [
+                                    'name' => 'description',
+                                    'content' => $description_template,
+                                ],
+                            ],
+                            'description_meta_tag',
+                        ];
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Implements hook_preprocess_html().
+ */
+
+function taxonomy_facet_meta_preprocess_html(&$variables) {
+    $current_path = \Drupal::service('path.current')->getPath();
+    $route_match = \Drupal::routeMatch();
+    $path_parts = explode('/', trim($current_path, '/'));
+    if ($route_match->getRouteName() !== 'entity.node.canonical') {
+        $config = \Drupal::config('taxonomy_facet_meta.settings');
+        $pretty_paths_coder = $config->get('pretty_paths_coder');
+
+        $base_facet_url = $config->get('facet_base_url');
+        $base_facet_path = parse_url($base_facet_url, PHP_URL_PATH) ?: '/';
+
+        if (strpos($current_path, $base_facet_path) === 0) {
+            $facet_aliases = $config->get('facet_alias_');
+            $vocabularies = Vocabulary::loadMultiple();
+            $num_vocabularies = count($vocabularies);
+
+            if ($num_vocabularies == 1) {
+                $vocab_id = reset($vocabularies)->id();
+                $facet_alias = $config->get('facet_alias_' . $vocab_id);
+
+                if (in_array($facet_alias, $path_parts)) {
+                    if ($pretty_paths_coder === 'taxonomy_term_name_id') {
+                        $key = array_search($facet_alias, $path_parts);
+                        $key++;
+                        preg_match('/(?<=-)[0-9]+$/', $path_parts[$key], $category_arg);
+                        if (!empty($category_arg)) {
+                            $term = Term::load($category_arg[0]);
+                            if ($term) {
+                                $name = $term->name->value;
+                            }
+                        }
+                    } elseif ($pretty_paths_coder === 'taxonomy_term_name') {
+                        $alias_index = array_search($facet_alias, $path_parts);
+                        $term_url_part = $path_parts[$alias_index + 1] ?? null;
+                        if ($term_url_part) {
+                            $query = \Drupal::database()->select('path_alias', 'pa');
+                            $query->fields('pa', ['path', 'alias']);
+                            $query->condition('pa.alias', '%' . \Drupal::database()->escapeLike($term_url_part) . '%', 'LIKE');
+                            $path_aliases = $query->execute()->fetchAll();
+                            foreach ($path_aliases as $path_alias) {
+                                $alias_parts = explode('/', $path_alias->alias);
+                                $last_part = end($alias_parts);
+                                if ($last_part === $term_url_part && preg_match('/taxonomy\/term\/(\d+)/', $path_alias->path, $matches)) {
+                                    $term_id = $matches[1];
+                                    $term = Term::load($term_id);
+                                    $name = $term->name->value;
+                                }
+                            }
+                        }
+                    }
+
+                    $title_template = $config->get('title_template_' . $vocab_id);
+                    if ($title_template && isset($name)) {
+                        $title_template = str_replace('[token]', $name, $title_template);
+                        $variables['head_title'] = $title_template;
+                    }
+                }
+            } elseif ($num_vocabularies > 1) {
+                $first_vocab = $config->get('first_vocab_select');
+                $second_vocab = $config->get('second_vocab_select');
+
+                $first_vocab_facet_alias = $config->get('facet_alias_' . $first_vocab);
+
+                $active_facet_aliases = [];
+
+                $first_facet_alias = $config->get('facet_alias_' . $first_vocab);
+                if ($first_facet_alias && in_array($first_facet_alias, $path_parts)) {
+                    $active_facet_aliases[] = $first_facet_alias;
+                }
+
+                $second_facet_alias = $config->get('facet_alias_' . $second_vocab);
+                if ($second_facet_alias && in_array($second_facet_alias, $path_parts)) {
+                    $active_facet_aliases[] = $second_facet_alias;
+                }
+
+                if (count($active_facet_aliases) === 1) {
+                    if ($pretty_paths_coder === 'taxonomy_term_name_id') {
+                        $key = array_search($active_facet_aliases['0'], $path_parts);
+                        $key++;
+                        preg_match('/(?<=-)[0-9]+$/', $path_parts[$key], $category_arg);
+                        $term = Term::load($category_arg[0]);
+                        $name = $term->name->value;
+                    } elseif ($pretty_paths_coder === 'taxonomy_term_name') {
+                        $alias_index = array_search($active_facet_aliases['0'], $path_parts);
+                        $term_url_part = $path_parts[$alias_index + 1] ?? null;
+                        if ($term_url_part) {
+                            $query = \Drupal::database()->select('path_alias', 'pa');
+                            $query->fields('pa', ['path', 'alias']);
+                            $query->condition('pa.alias', '%' . \Drupal::database()->escapeLike($term_url_part) . '%', 'LIKE');
+                            $path_aliases = $query->execute()->fetchAll();
+                            foreach ($path_aliases as $path_alias) {
+                                $alias_parts = explode('/', $path_alias->alias);
+                                $last_part = end($alias_parts);
+                                if ($last_part === $term_url_part && preg_match('/taxonomy\/term\/(\d+)/', $path_alias->path, $matches)) {
+                                    $term_id = $matches[1];
+                                    $term = Term::load($term_id);
+                                    $name = $term->name->value;
+                                }
+                            }
+                        }
+                    }
+
+                    $title_template = $config->get('title_template_' . $active_facet_aliases['0']);
+
+                    if ($title_template) {
+                        $title_template = str_replace('[token]', $name, $title_template);
+                        $variables['head_title'] = $title_template;
+                    }
+                } elseif (count($active_facet_aliases) > 1) {
+                    if ($pretty_paths_coder === 'taxonomy_term_name_id') {
+                        $facet_names = [];
+                        foreach ($active_facet_aliases as $facet_alias) {
+                            if (in_array($facet_alias, $path_parts)) {
+                                $key = array_search($facet_alias, $path_parts);
+                                $key++;
+                                preg_match('/(?<=-)[0-9]+$/', $path_parts[$key], $facet_arg);
+                                if (!empty($facet_arg)) {
+                                    $term = Term::load($facet_arg[0]);
+                                    if ($term) {
+                                        $facet_names[$facet_alias] = $term->getName();
+                                    }
+                                }
+                            }
+                        }
+                    } elseif ($pretty_paths_coder === 'taxonomy_term_name') {
+                        $facet_names = [];
+
+                        foreach ($active_facet_aliases as $facet_alias) {
+                            if (in_array($facet_alias, $path_parts)) {
+                                $alias_index = array_search($facet_alias, $path_parts);
+                                $term_url_part = $path_parts[$alias_index + 1] ?? null;
+
+                                if ($term_url_part) {
+
+                                    $query = \Drupal::database()->select('path_alias', 'pa');
+                                    $query->fields('pa', ['path', 'alias']);
+                                    $query->condition('pa.alias', '%' . \Drupal::database()->escapeLike($term_url_part) . '%', 'LIKE');
+                                    $path_aliases = $query->execute()->fetchAll();
+
+                                    foreach ($path_aliases as $path_alias) {
+                                        $alias_parts = explode('/', $path_alias->alias);
+                                        $last_part = end($alias_parts);
+
+                                        if ($last_part === $term_url_part && preg_match('/taxonomy\/term\/(\d+)/', $path_alias->path, $matches)) {
+                                            $term_id = $matches[1];
+                                            $term = Term::load($term_id);
+
+                                            if ($term) {
+                                                $facet_names[$facet_alias] = $term->getName();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    $title_template = $config->get('double_token_title_template');
+
+                    $counter = 1;
+
+                    foreach ($facet_names as $name) {
+                        $title_template = str_replace("[token$counter]", $name, $title_template);
+                        $counter++;
+                    }
+
+                    if ($title_template) {
+                        $variables['head_title'] = $title_template;
+                    }
+                }
+            }
+        }
+    }
+}
+
+function taxonomy_facet_meta_preprocess_page_title(&$variables) {
+    $current_path = \Drupal::service('path.current')->getPath();
+    $route_match = \Drupal::routeMatch();
+    $path_parts = explode('/', trim($current_path, '/'));
+    if ($route_match->getRouteName() !== 'entity.node.canonical') {
+        $config = \Drupal::config('taxonomy_facet_meta.settings');
+        $pretty_paths_coder = $config->get('pretty_paths_coder');
+
+        $base_facet_url = $config->get('facet_base_url');
+        $base_facet_path = parse_url($base_facet_url, PHP_URL_PATH) ?: '/';
+
+        if (strpos($current_path, $base_facet_path) === 0) {
+            $facet_aliases = $config->get('facet_alias_');
+            $vocabularies = Vocabulary::loadMultiple();
+            $num_vocabularies = count($vocabularies);
+
+            if ($num_vocabularies == 1) {
+                $vocab_id = reset($vocabularies)->id();
+                $facet_alias = $config->get('facet_alias_' . $vocab_id);
+
+                if (in_array($facet_alias, $path_parts)) {
+                    if ($pretty_paths_coder === 'taxonomy_term_name_id') {
+                        $key = array_search($facet_alias, $path_parts);
+                        $key++;
+                        preg_match('/(?<=-)[0-9]+$/', $path_parts[$key], $category_arg);
+                        if (!empty($category_arg)) {
+                            $term = Term::load($category_arg[0]);
+                            if ($term) {
+                                $name = $term->name->value;
+                            }
+                        }
+                    } elseif ($pretty_paths_coder === 'taxonomy_term_name') {
+                        $alias_index = array_search($facet_alias, $path_parts);
+                        $term_url_part = $path_parts[$alias_index + 1] ?? null;
+                        if ($term_url_part) {
+                            $query = \Drupal::database()->select('path_alias', 'pa');
+                            $query->fields('pa', ['path', 'alias']);
+                            $query->condition('pa.alias', '%' . \Drupal::database()->escapeLike($term_url_part) . '%', 'LIKE');
+                            $path_aliases = $query->execute()->fetchAll();
+                            foreach ($path_aliases as $path_alias) {
+                                $alias_parts = explode('/', $path_alias->alias);
+                                $last_part = end($alias_parts);
+                                if ($last_part === $term_url_part && preg_match('/taxonomy\/term\/(\d+)/', $path_alias->path, $matches)) {
+                                    $term_id = $matches[1];
+                                    $term = Term::load($term_id);
+                                    $name = $term->name->value;
+                                }
+                            }
+                        }
+                    }
+
+                    $title_template = $config->get('h1_template_' . $vocab_id);
+                    if ($title_template && isset($name)) {
+                        $title_template = str_replace('[token]', $name, $title_template);
+                        $variables['title'] = $title_template;
+                    }
+                }
+            } elseif ($num_vocabularies > 1) {
+                $first_vocab = $config->get('first_vocab_select');
+                $second_vocab = $config->get('second_vocab_select');
+                
+                $first_vocab_facet_alias = $config->get('facet_alias_' . $first_vocab);
+
+                $active_facet_aliases = [];
+
+                $first_facet_alias = $config->get('facet_alias_' . $first_vocab);
+                if ($first_facet_alias && in_array($first_facet_alias, $path_parts)) {
+                    $active_facet_aliases[] = $first_facet_alias;
+                }
+
+                $second_facet_alias = $config->get('facet_alias_' . $second_vocab);
+                if ($second_facet_alias && in_array($second_facet_alias, $path_parts)) {
+                    $active_facet_aliases[] = $second_facet_alias;
+                }
+
+                if (count($active_facet_aliases) === 1) {
+                    if ($pretty_paths_coder === 'taxonomy_term_name_id') {
+                        $key = array_search($active_facet_aliases['0'], $path_parts);
+                        $key++;
+                        preg_match('/(?<=-)[0-9]+$/', $path_parts[$key], $category_arg);
+                        $term = Term::load($category_arg[0]);
+                        $name = $term->name->value;
+                    } elseif ($pretty_paths_coder === 'taxonomy_term_name') {
+                        $alias_index = array_search($active_facet_aliases['0'], $path_parts);
+                        $term_url_part = $path_parts[$alias_index + 1] ?? null;
+                        if ($term_url_part) {
+                            $query = \Drupal::database()->select('path_alias', 'pa');
+                            $query->fields('pa', ['path', 'alias']);
+                            $query->condition('pa.alias', '%' . \Drupal::database()->escapeLike($term_url_part) . '%', 'LIKE');
+                            $path_aliases = $query->execute()->fetchAll();
+                            foreach ($path_aliases as $path_alias) {
+                                $alias_parts = explode('/', $path_alias->alias);
+                                $last_part = end($alias_parts);
+                                if ($last_part === $term_url_part && preg_match('/taxonomy\/term\/(\d+)/', $path_alias->path, $matches)) {
+                                    $term_id = $matches[1];
+                                    $term = Term::load($term_id);
+                                    $name = $term->name->value;
+                                }
+                            }
+                        }
+                    }
+
+                    $title_template = $config->get('h1_template_' . $active_facet_aliases['0']);
+
+                    if ($title_template) {
+                        $title_template = str_replace('[token]', $name, $title_template);
+                        $variables['title'] = $title_template;
+                    }
+
+                } elseif (count($active_facet_aliases) > 1) {
+                    if ($pretty_paths_coder === 'taxonomy_term_name_id') {
+                        $facet_names = [];
+                        foreach ($active_facet_aliases as $facet_alias) {
+                            if (in_array($facet_alias, $path_parts)) {
+                                $key = array_search($facet_alias, $path_parts);
+                                $key++;
+                                preg_match('/(?<=-)[0-9]+$/', $path_parts[$key], $facet_arg);
+                                if (!empty($facet_arg)) {
+                                    $term = Term::load($facet_arg[0]);
+                                    if ($term) {
+                                        $facet_names[$facet_alias] = $term->getName();
+                                    }
+                                }
+                            }
+                        }
+
+                    } elseif ($pretty_paths_coder === 'taxonomy_term_name') {
+                        $facet_names = [];
+
+                        foreach ($active_facet_aliases as $facet_alias) {
+                            if (in_array($facet_alias, $path_parts)) {
+                                $alias_index = array_search($facet_alias, $path_parts);
+                                $term_url_part = $path_parts[$alias_index + 1] ?? null;
+                    
+                                if ($term_url_part) {
+                                    
+                                    $query = \Drupal::database()->select('path_alias', 'pa');
+                                    $query->fields('pa', ['path', 'alias']);
+                                    $query->condition('pa.alias', '%' . \Drupal::database()->escapeLike($term_url_part) . '%', 'LIKE');
+                                    $path_aliases = $query->execute()->fetchAll();
+                    
+                                    foreach ($path_aliases as $path_alias) {
+                                        $alias_parts = explode('/', $path_alias->alias);
+                                        $last_part = end($alias_parts);
+                    
+                                        if ($last_part === $term_url_part && preg_match('/taxonomy\/term\/(\d+)/', $path_alias->path, $matches)) {
+                                            $term_id = $matches[1];
+                                            $term = Term::load($term_id);
+                    
+                                            if ($term) {
+                                                $facet_names[$facet_alias] = $term->getName();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    $title_template = $config->get('double_token_h1_template');
+
+                    $counter = 1;
+
+                    foreach ($facet_names as $name) {
+                        $title_template = str_replace("[token$counter]", $name, $title_template);
+                        $counter++;
+                    }
+
+                    if ($title_template) {
+                        $variables['title'] = $title_template;
+                    }
+                }
+            }
+        }
+    }
+}
