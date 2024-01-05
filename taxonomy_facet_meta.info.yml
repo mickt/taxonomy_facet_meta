@@ -1,0 +1,7 @@
+name: Taxonomy Facet Meta
+type: module
+description: 'Alters meta tags on facet pages based on taxonomy.'
+core_version_requirement: ^9 || ^10
+package: DARTHARTH
+dependencies:
+  - drupal:taxonomy
