@@ -1,0 +1,6 @@
+taxonomy_facet_meta.admin_settings:
+  title: 'Taxonomy Facet Meta Settings'
+  description: 'Settings for the Taxonomy Facet Meta module.'
+  parent: system.admin_config_search
+  route_name: taxonomy_facet_meta.settings
+  weight: 100
