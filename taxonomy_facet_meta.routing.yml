@@ -1,0 +1,7 @@
+taxonomy_facet_meta.settings:
+  path: '/admin/config/search/taxonomy-facet-meta'
+  defaults:
+    _form: '\Drupal\taxonomy_facet_meta\Form\TaxonomyFacetMetaSettingsForm'
+    _title: 'Taxonomy Facet Meta Settings'
+  requirements:
+    _permission: 'administer site configuration'
