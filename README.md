@@ -10,4 +10,4 @@ After that select one or two taxonomy vocabulary that you use in facets.Next, pa
 
 In template you need to use token - [token] as taxonomy name. For example - template "Articles from [token] category" on page with active facet category Recipe would be like "Articles from Recipe category". If you left field blank, your tag has default value.
 
-If you will be working with two dictionaries, you can also expose tag templates for the situation where both facets are active.
+If you will be working with two vocabularies, you can also expose tag templates for the situation where both facets are active.
